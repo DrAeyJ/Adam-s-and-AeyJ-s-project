@@ -30,6 +30,11 @@ class Questions(SqlAlchemyBase):
     answer_3 = Column(String, nullable=True)
     answer_4 = Column(String, nullable=True)
 
+    answer_1_count = Column(Integer, default=0)
+    answer_2_count = Column(Integer, default=0)
+    answer_3_count = Column(Integer, nullable=True)
+    answer_4_count = Column(Integer, nullable=True)
+
     likes_count = Column(Integer, default=0)
     dislikes_count = Column(Integer, default=0)
     reports_count = Column(Integer, default=0)

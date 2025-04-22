@@ -25,7 +25,7 @@ def global_init(db_file):
     SqlAlchemyBase.metadata.create_all(engine)
 
 
+# noinspection PyCallingNonCallable
 def create_session() -> Session:
     global __factory
-    # noinspection PyCallingNonCallable
     return __factory()
