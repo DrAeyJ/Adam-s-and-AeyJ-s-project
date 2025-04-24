@@ -5,5 +5,8 @@ reply_keyboard = {'r': [['/start', '/help'],
                         ['/register']],
                   'm': [['/start', '/help'],
                         ['/get_question'],
-                        ['/moderate']]}
+                        ['/moderate']],
+                  'l-d-r': [['Like', 'Dislike'],
+                            ['Report'],
+                            ['Skip']]}
 mode = 'u'

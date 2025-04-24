@@ -149,7 +149,9 @@ async def stats(update, context):
             '',
             f'Likes: {current_question.likes_count}',
             f'Dislikes: {current_question.dislikes_count}',
-            f'Reports: {current_question.reports_count}'
+            f'Reports: {current_question.reports_count}',
+            '',
+            f'Share your opinion about this question:\nUse like, dislike or report.'
         ]
         answer_repr = '\n'.join(answer_repr)
 
@@ -175,8 +177,8 @@ async def stats(update, context):
                 db_sess.commit()
                 db_sess.close()
 
-        await update.message.reply_text(answer_repr, reply_markup=markup)
-        return ConversationHandler.END
+        await update.message.reply_text(answer_repr, reply_markup=ReplyKeyboardMarkup(reply_keyboard['l-d-r']))
+        return 2
     else:
         keyboard = [['1️⃣', '2️⃣']]
         if len(current_answers) == 3:
@@ -188,6 +190,31 @@ async def stats(update, context):
                                         reply_markup=ReplyKeyboardMarkup(keyboard,
                                                                          one_time_keyboard=True))
         return 1
+
+
+# noinspection PyUnusedLocal
+async def like_dislike_report(update, context):
+    if update.message.text == 'Like':
+        db_sess = db_session.create_session()
+        db_sess.query(Questions).filter(Questions.id.like(current_question.id)).first().likes_count += 1
+        db_sess.commit()
+        db_sess.close()
+        await update.message.reply_text('Question liked. \nYaay! :)', reply_markup=markup)
+    elif update.message.text == 'Dislike':
+        db_sess = db_session.create_session()
+        db_sess.query(Questions).filter(Questions.id.like(current_question.id)).first().dislikes_count += 1
+        db_sess.commit()
+        db_sess.close()
+        await update.message.reply_text('Question disliked. \nAww :(', reply_markup=markup)
+    elif update.message.text == 'Report':
+        db_sess = db_session.create_session()
+        db_sess.query(Questions).filter(Questions.id.like(current_question.id)).first().reports_count += 1
+        db_sess.commit()
+        db_sess.close()
+        await update.message.reply_text('Report posted. Thank you for feedback! :)', reply_markup=markup)
+    else:
+        await update.message.reply_text('Reaction skipped. o_o', reply_markup=markup)
+    return ConversationHandler.END
 
 
 # noinspection PyUnusedLocal
@@ -220,6 +247,7 @@ conv_handler = ConversationHandler(
 
         states={
             1: [MessageHandler(filters.TEXT & ~filters.COMMAND, stats)],
+            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, like_dislike_report)]
         },
 
         fallbacks=[CommandHandler('stop', stop)])
