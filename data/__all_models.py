@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String
+import datetime
+
+from sqlalchemy import Column, Integer, String, DATETIME
 from data.db_session import SqlAlchemyBase
 
 
@@ -12,6 +14,7 @@ class User(SqlAlchemyBase):
     questions_made_count = Column(Integer, default=0)
     questions_moderated_count = Column(Integer, default=0)
     questions_answered_count = Column(Integer, default=0)
+    suspended_until = Column(DATETIME, default=datetime.datetime(year=1, month=1, day=1))
 
     def __repr__(self):
         return f"<User(name='{self.name}', tg_id={self.telegram_id})>"

@@ -1,5 +1,6 @@
 import logging
 import random
+import datetime
 
 from data import db_session
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ConversationHandler
@@ -13,7 +14,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 db_session.global_init('db/site.db')
 mode = 'u'
-current_question = Questions
+current_question = Questions()
 current_answers = []
 
 
@@ -35,10 +36,13 @@ async def start(update, context):
         mode = 'u'
         application.add_handler(CommandHandler("register", register))
     elif db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type == 'Registered':
-        application.add_handler(conv_handler)
+        application.add_handler(questionaire_handler)
+        application.add_handler(question_adding_handler)
         mode = 'r'
     elif db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type == 'Moderator':
-        application.add_handler(conv_handler)
+        application.add_handler(questionaire_handler)
+        application.add_handler(question_adding_handler)
+        application.add_handler(moderator_handler)
         mode = 'm'
     markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
 
@@ -63,7 +67,7 @@ def user_registrarion(tg_user):
         db_sess = db_session.create_session()
         db_sess.add(user)
         db_sess.commit()
-        print('Registered')
+        print(f'Registered TG user: {tg_user.id}')
 
     db_sess.close()
 
@@ -194,6 +198,7 @@ async def stats(update, context):
 
 # noinspection PyUnusedLocal
 async def like_dislike_report(update, context):
+    global current_question
     if update.message.text == 'Like':
         db_sess = db_session.create_session()
         db_sess.query(Questions).filter(Questions.id.like(current_question.id)).first().likes_count += 1
@@ -214,12 +219,18 @@ async def like_dislike_report(update, context):
         await update.message.reply_text('Report posted. Thank you for feedback! :)', reply_markup=markup)
     else:
         await update.message.reply_text('Reaction skipped. o_o', reply_markup=markup)
+    current_question = Questions()
     return ConversationHandler.END
 
 
 # noinspection PyUnusedLocal
 async def stop(update, context):
-    await update.message.reply_text('Questionaire ended.', reply_markup=markup)
+    global markup
+    global question_in_creation
+
+    markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
+    question_in_creation = Questions()
+    await update.message.reply_text('Ended.', reply_markup=markup)
     return ConversationHandler.END
 
 
@@ -234,20 +245,195 @@ async def register(update, context):
     db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().type = 'Registered'
     db_sess.commit()
     db_sess.close()
-    application.add_handler(conv_handler)
+    application.add_handler(questionaire_handler)
+    application.add_handler(question_adding_handler)
 
     await update.message.reply_text('User type changed to: Registered.', reply_markup=markup)
+
+
+question_in_creation = Questions()
+
+
+# noinspection PyUnusedLocal
+async def add_question(update, context):
+    global question_in_creation
+    global markup
+
+    db_sess = db_session.create_session()
+    if datetime.datetime.now() >= db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().suspended_until:
+        markup = ReplyKeyboardMarkup(reply_keyboard['q-a'], one_time_keyboard=False)
+        question_in_creation.author_tg_id = update.effective_user.id
+        await update.message.reply_text('Please write the content of the question.', reply_markup=markup)
+        return 1
+    else:
+        await update.message.reply_text(f'You seem to be currently suspended from creating a question. \nYou are suspended until {db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().suspended_until}')
+        return ConversationHandler.END
+
+
+# noinspection PyUnusedLocal
+async def num_of_answers(update, context):
+    global question_in_creation
+    global markup
+
+    question_in_creation.content = update.message.text
+    await update.message.reply_text('How many answers does your question have?', reply_markup=markup)
+    return 2
+
+
+answers_left = 0
+
+
+# noinspection PyUnusedLocal
+async def answers_writing(update, context):
+    global question_in_creation
+    global answers_left
+    global markup
+
+    if answers_left:
+        return 3
+
+    try:
+        question_in_creation.answers_count = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text('How many answers does your question have?', reply_markup=markup)
+        return 2
+    answers_left = int(update.message.text)
+    await update.message.reply_text('Please write the first answer to your question.', reply_markup=markup)
+    return 3
+
+
+# noinspection PyUnusedLocal
+async def more_ans(update, context):
+    global question_in_creation
+    global answers_left
+    global markup
+    global mode
+
+    if not question_in_creation.answer_1:
+        question_in_creation.answer_1 = update.message.text
+    elif not question_in_creation.answer_2:
+        question_in_creation.answer_2 = update.message.text
+    elif not question_in_creation.answer_3:
+        question_in_creation.answer_3 = update.message.text
+    elif not question_in_creation.answer_4:
+        question_in_creation.answer_4 = update.message.text
+    answers_left -= 1
+    if not answers_left:
+        markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
+        await update.message.reply_text('Question added. \nPlease keep in mind that you will be suspended by the staff if your question is inappropriate.', reply_markup=markup)
+        db_sess = db_session.create_session()
+        db_sess.add(question_in_creation)
+        db_sess.commit()
+        db_sess.close()
+        question_in_creation = Questions()
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text('Next answer please.', reply_markup=markup)
+        return 3
+
+
+# noinspection PyUnusedLocal
+async def moderate(update, context):
+    global current_question
+    global current_answers
+
+    db_sess = db_session.create_session()
+    if db_sess.query(Questions).filter(Questions.reports_count > 5).all():
+        question = random.choice(db_sess.query(Questions).filter(Questions.reports_count > 5).all())
+        current_question = question
+        author_name = db_sess.query(User).filter(User.telegram_id.like(question.author_tg_id)).first().name
+        db_sess.close()
+        answers = [question.answer_1,
+                   question.answer_2,
+                   question.answer_3,
+                   question.answer_4]
+        answer_sheet = []
+        emote = '1️⃣'[1:]
+        for i in range(len(answers)):
+            if answers[i] is not None:
+                answer_sheet.append(f'{str(i + 1) + emote}: {answers[i]}')
+        current_answers = answer_sheet
+        answer_sheet = '\n'.join(answer_sheet)
+
+        question_repr = [
+            f'Author: {author_name}                             ',
+            '',
+            f'Content: {question.content}',
+            '',
+            f'Answers: \n{answer_sheet}',
+            '',
+            'You can either delete this question and suspend the author\nor skip it if you think that it`s fine to.'
+        ]
+        question_repr = '\n'.join(question_repr)
+        await update.message.reply_text(question_repr, reply_markup=ReplyKeyboardMarkup(reply_keyboard['i-m'], one_time_keyboard=False))
+        return 1
+    else:
+        await update.message.reply_text('No questions to moderate right now.', reply_markup=ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False))
+        return ConversationHandler.END
+
+
+# noinspection PyUnusedLocal
+async def del_or_skip(update, context):
+    global mode
+
+    db_sess = db_session.create_session()
+    if update.message.text == 'Delete and suspend':
+        db_sess.delete(current_question)
+        db_sess.commit()
+        db_sess.close()
+        await update.message.reply_text('How much days would you like to suspend the user for?', reply_markup=ReplyKeyboardMarkup(reply_keyboard['q-a'], one_time_keyboard=False))
+        return 2
+    elif update.message.text == 'Spare and skip':
+        db_sess.query(Questions).filter(Questions.id.like(current_question.id)).first().reports_count = 0
+        db_sess.commit()
+        db_sess.close()
+        await update.message.reply_text('Question`s reports cleared. \nThank you for the moderation!', reply_markup=ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False))
+        return ConversationHandler.END
+
+
+# noinspection PyUnusedLocal
+async def suspension_time(update, context):
+    try:
+        time = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text('How much days would you like to suspend the user for?')
+        return 2
+    db_sess = db_session.create_session()
+    db_sess.query(User).filter(User.telegram_id.like(current_question.author_tg_id)).first().suspended_until = datetime.datetime.now() + datetime.timedelta(days=time)
+    db_sess.commit()
+    db_sess.close()
+    await update.message.reply_text(f'Author of the question suspended for {time} days. \nThank you for your moderation.', reply_markup=ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False))
+    return ConversationHandler.END
 
 
 application = Application.builder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("help", help_command))
-conv_handler = ConversationHandler(
+questionaire_handler = ConversationHandler(
         entry_points=[CommandHandler('get_question', get_random_questions)],
 
         states={
             1: [MessageHandler(filters.TEXT & ~filters.COMMAND, stats)],
             2: [MessageHandler(filters.TEXT & ~filters.COMMAND, like_dislike_report)]
+        },
+
+        fallbacks=[CommandHandler('stop', stop)])
+question_adding_handler = ConversationHandler(
+        entry_points=[CommandHandler('add_question', add_question)],
+
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, num_of_answers)],
+            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, answers_writing)],
+            3: [MessageHandler(filters.TEXT & ~filters.COMMAND, more_ans)]
+        },
+
+        fallbacks=[CommandHandler('stop', stop)])
+moderator_handler = ConversationHandler(
+        entry_points=[CommandHandler('moderate', moderate)],
+
+        states={
+            1: [MessageHandler(filters.TEXT & ~filters.COMMAND, del_or_skip)],
+            2: [MessageHandler(filters.TEXT & ~filters.COMMAND, suspension_time)]
         },
 
         fallbacks=[CommandHandler('stop', stop)])
