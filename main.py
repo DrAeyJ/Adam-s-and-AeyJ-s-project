@@ -1,17 +1,17 @@
-import datetime
 import logging
-import random
-
-import telebot
-from telegram import ReplyKeyboardMarkup
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ConversationHandler
+import datetime
+import json
 
 from data import db_session
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ConversationHandler
+from telegram import ReplyKeyboardMarkup
 from data.__all_models import User, Questions
 from data.env import BOT_TOKEN, reply_keyboard
 
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.ERROR
+    format='%(asctime)s : %(levelname)s : %(message)s',
+    level=logging.WARNING,
+    filename='db/log_file.txt'
 )
 logger = logging.getLogger(__name__)
 db_session.global_init('db/site.db')
@@ -27,6 +27,8 @@ async def echo(update, context):
 
 # noinspection PyUnusedLocal
 async def start(update, context):
+    logger.warning(f'          App started            : {update.effective_user.id} : {update.effective_user.name}')
+
     global mode
     global markup
 
@@ -46,6 +48,12 @@ async def start(update, context):
         application.add_handler(question_adding_handler)
         application.add_handler(moderator_handler)
         mode = 'm'
+        with open('db/moderator_question_relation.json') as file:
+            data = json.load(file)
+            if not str(user.id) in data:
+                data[str(user.id)] = []
+        with open('db/moderator_question_relation.json', 'w') as file:
+            json.dump(data, file)
     markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
 
     await update.message.reply_html(f'Hi {user.mention_html()}. I am a questionaire.', reply_markup=markup)
@@ -53,6 +61,8 @@ async def start(update, context):
 
 # noinspection PyUnusedLocal
 async def help_command(update, context):
+    logger.warning(f'       Help Command called       : {update.effective_user.id} : {update.effective_user.name}')
+
     await update.message.reply_text("Go fuck urself.", reply_markup=markup)
 
 
@@ -63,6 +73,11 @@ def user_registrarion(tg_user):
     ids = [i.telegram_id for i in db_sess.query(User).all()]
 
     if tg_user.id not in ids:
+        with open('db/user_question_relation.json', encoding='utf-8') as file:
+            data = json.load(file)
+            data[tg_user.id] = []
+        with open('db/user_question_relation.json', 'w', encoding='utf-8') as file:
+            json.dump(data, file)
         user = User()
         user.name = tg_user.name
         user.telegram_id = tg_user.id
@@ -76,13 +91,31 @@ def user_registrarion(tg_user):
 
 # noinspection PyUnusedLocal
 async def get_random_questions(update, context):
+    logger.warning(f'        Question called          : {update.effective_user.id} : {update.effective_user.name}')
+
     global current_question
     global current_answers
 
     db_sess = db_session.create_session()
 
     if db_sess.query(Questions).all():
-        question = random.choice(db_sess.query(Questions).all())
+        questions = db_sess.query(Questions).all()
+        with open('db/user_question_relation.json') as file:
+            try:
+                data = json.load(file)
+            except json.decoder.JSONDecodeError:
+                data = {}
+            question = None
+            for i in questions:
+                if i.id in data[str(update.effective_user.id)]:
+                    continue
+                else:
+                    question = i
+                    break
+            if not question:
+                await update.message.reply_text(
+                    'Sorry, no questions are available at the moment, or you already answered each one.')
+                return ConversationHandler.END
         current_question = question
         author_name = db_sess.query(User).filter(User.telegram_id.like(question.author_tg_id)).first().name
         answers = [question.answer_1,
@@ -111,7 +144,7 @@ async def get_random_questions(update, context):
             keyboard.append(['3️⃣'])
         elif len(answer_sheet.split('\n')) == 4:
             keyboard.append(['3️⃣', '4️⃣'])
-        keyboard.append(['/stop'])
+        keyboard.append(['/skip', '/stop'])
 
         if question:
             await update.message.reply_text(question_repr,
@@ -119,7 +152,8 @@ async def get_random_questions(update, context):
                                                                              one_time_keyboard=True))
             return 1
     else:
-        await update.message.reply_text('Sorry, no questions are available at the moment.')
+        await update.message.reply_text(
+            'Sorry, no questions are available at the moment, or you already answered each one.')
         return ConversationHandler.END
 
     db_sess.close()
@@ -221,12 +255,19 @@ async def like_dislike_report(update, context):
         await update.message.reply_text('Report posted. Thank you for feedback! :)', reply_markup=markup)
     else:
         await update.message.reply_text('Reaction skipped. o_o', reply_markup=markup)
+    with open('db/user_question_relation.json') as file:
+        data = json.load(file)
+        data[str(update.effective_user.id)].append(current_question.id)
+    with open('db/user_question_relation.json', 'w') as file:
+        json.dump(data, file)
     current_question = Questions()
     return ConversationHandler.END
 
 
 # noinspection PyUnusedLocal
 async def stop(update, context):
+    logger.warning(f'        Proccess stopped         : {update.effective_user.id} : {update.effective_user.name}')
+
     global markup
     global question_in_creation
 
@@ -236,29 +277,41 @@ async def stop(update, context):
     return ConversationHandler.END
 
 
-def check_subscription(user_id, channel_id):
-    bot = telebot.TeleBot(BOT_TOKEN)
-    status = bot.get_chat_member(channel_id, user_id).status
-    return status in ['member', 'administrator', 'creator']
+# noinspection PyUnusedLocal
+async def skip(update, context):
+    logger.warning(f'        Question skipped         : {update.effective_user.id} : {update.effective_user.name}')
+
+    global current_question
+    global markup
+
+    with open('db/user_question_relation.json') as file:
+        data = json.load(file)
+        data[str(update.effective_user.id)].append(current_question.id)
+    with open('db/user_question_relation.json', 'w') as file:
+        json.dump(data, file)
+    current_question = Questions()
+
+    await update.message.reply_text('Question skiiped. o_o', reply_markup=markup)
+    return ConversationHandler.END
 
 
 # noinspection PyUnusedLocal
 async def register(update, context):
+    logger.warning(f' USER TYPE CHANGED TO REGISTERED : {update.effective_user.id} : {update.effective_user.name}')
+
     global mode
     global markup
 
-    if check_subscription(update.effective_user.id, '@QuestionareAd') is True:
-        mode = 'r'
-        markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
-        db_sess = db_session.create_session()
-        db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().type = 'Registered'
-        db_sess.commit()
-        db_sess.close()
-        application.add_handler(questionaire_handler)
-        application.add_handler(question_adding_handler)
-        await update.message.reply_text('User type changed to: Registered.', reply_markup=markup)
-    else:
-        await update.message.reply_text('Subscrieb on channa @QuestionareAd')
+    mode = 'r'
+    markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
+    db_sess = db_session.create_session()
+    db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().type = 'Registered'
+    db_sess.commit()
+    db_sess.close()
+    application.add_handler(questionaire_handler)
+    application.add_handler(question_adding_handler)
+
+    await update.message.reply_text('User type changed to: Registered.', reply_markup=markup)
 
 
 question_in_creation = Questions()
@@ -266,6 +319,8 @@ question_in_creation = Questions()
 
 # noinspection PyUnusedLocal
 async def add_question(update, context):
+    logger.warning(f' Question adding process started : {update.effective_user.id} : {update.effective_user.name}')
+
     global question_in_creation
     global markup
 
@@ -278,7 +333,8 @@ async def add_question(update, context):
         return 1
     else:
         await update.message.reply_text(
-            f'You seem to be currently suspended from creating a question. \nYou are suspended until {db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().suspended_until}')
+            f'You seem to be currently suspended from creating a question. \nYou are suspended until {db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().suspended_until}',
+            reply_markup=reply_keyboard[mode])
         return ConversationHandler.END
 
 
@@ -305,7 +361,15 @@ async def answers_writing(update, context):
         return 3
 
     try:
-        question_in_creation.answers_count = int(update.message.text)
+        if 2 <= int(update.message.text) <= 4:
+            question_in_creation.answers_count = int(update.message.text)
+            if int(update.message.text) == 3:
+                question_in_creation.answer_3_count = 0
+            if int(update.message.text) == 4:
+                question_in_creation.answer_4_count = 0
+        else:
+            await update.message.reply_text('How many answers does your question have?', reply_markup=markup)
+            return 2
     except ValueError:
         await update.message.reply_text('How many answers does your question have?', reply_markup=markup)
         return 2
@@ -338,6 +402,11 @@ async def more_ans(update, context):
         db_sess = db_session.create_session()
         db_sess.add(question_in_creation)
         db_sess.commit()
+        with open('db/user_question_relation.json') as file:
+            data = json.load(file)
+            data[str(update.effective_user.id)].append(question_in_creation.id)
+        with open('db/user_question_relation.json', 'w') as file:
+            json.dump(data, file)
         db_sess.close()
         question_in_creation = Questions()
         return ConversationHandler.END
@@ -348,12 +417,31 @@ async def more_ans(update, context):
 
 # noinspection PyUnusedLocal
 async def moderate(update, context):
+    logger.warning(f'       Moderation started        : {update.effective_user.id} : {update.effective_user.name}')
+
     global current_question
     global current_answers
 
     db_sess = db_session.create_session()
-    if db_sess.query(Questions).filter(Questions.reports_count > 5).all():
-        question = random.choice(db_sess.query(Questions).filter(Questions.reports_count > 5).all())
+    if db_sess.query(Questions).all():
+        questions = db_sess.query(Questions).all()
+        with open('db/moderator_question_relation.json') as file:
+            try:
+                data = json.load(file)
+            except json.decoder.JSONDecodeError:
+                data = {}
+            question = None
+            for i in questions:
+                if i.id in data[str(update.effective_user.id)]:
+                    continue
+                else:
+                    question = i
+                    break
+        if not question:
+            await update.message.reply_text('No questions to moderate right now.',
+                                            reply_markup=ReplyKeyboardMarkup(reply_keyboard[mode],
+                                                                             one_time_keyboard=False))
+            return ConversationHandler.END
         current_question = question
         author_name = db_sess.query(User).filter(User.telegram_id.like(question.author_tg_id)).first().name
         db_sess.close()
@@ -376,6 +464,10 @@ async def moderate(update, context):
             '',
             f'Answers: \n{answer_sheet}',
             '',
+            f'Likes: {current_question.likes_count}',
+            f'Dislikes: {current_question.dislikes_count}',
+            f'Reports: {current_question.reports_count}',
+            '',
             'You can either delete this question and suspend the author\nor skip it if you think that it`s fine to.'
         ]
         question_repr = '\n'.join(question_repr)
@@ -390,6 +482,8 @@ async def moderate(update, context):
 
 # noinspection PyUnusedLocal
 async def del_or_skip(update, context):
+    logger.warning(f'     Question skipped by mod     : {update.effective_user.id} : {update.effective_user.name}')
+
     global mode
 
     db_sess = db_session.create_session()
@@ -404,14 +498,21 @@ async def del_or_skip(update, context):
     elif update.message.text == 'Spare and skip':
         db_sess.query(Questions).filter(Questions.id.like(current_question.id)).first().reports_count = 0
         db_sess.commit()
+        with open('db/moderator_question_relation.json') as file:
+            data = json.load(file)
+            data[str(update.effective_user.id)].append(current_question.id)
+        with open('db/moderator_question_relation.json', 'w') as file:
+            json.dump(data, file)
         db_sess.close()
-        await update.message.reply_text('Question`s reports cleared. \nThank you for the moderation!',
+        await update.message.reply_text('Thank you for the moderation! :)',
                                         reply_markup=ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False))
         return ConversationHandler.END
 
 
 # noinspection PyUnusedLocal
 async def suspension_time(update, context):
+    logger.warning(f'     Question deleted by mod     : {update.effective_user.id} : {update.effective_user.name}')
+
     try:
         time = int(update.message.text)
     except ValueError:
@@ -422,6 +523,13 @@ async def suspension_time(update, context):
         current_question.author_tg_id)).first().suspended_until = datetime.datetime.now() + datetime.timedelta(
         days=time)
     db_sess.commit()
+    with open('db/moderator_question_relation.json') as file:
+        data = json.load(file)
+        for i in data:
+            if current_question.id in data[i]:
+                data[i].remove(current_question.id)
+    with open('db/moderator_question_relation.json', 'w') as file:
+        json.dump(data, file)
     db_sess.close()
     await update.message.reply_text(
         f'Author of the question suspended for {time} days. \nThank you for your moderation.',
@@ -436,11 +544,12 @@ questionaire_handler = ConversationHandler(
     entry_points=[CommandHandler('get_question', get_random_questions)],
 
     states={
+        0: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_random_questions)],
         1: [MessageHandler(filters.TEXT & ~filters.COMMAND, stats)],
         2: [MessageHandler(filters.TEXT & ~filters.COMMAND, like_dislike_report)]
     },
 
-    fallbacks=[CommandHandler('stop', stop)])
+    fallbacks=[CommandHandler('stop', stop), CommandHandler('skip', skip)])
 question_adding_handler = ConversationHandler(
     entry_points=[CommandHandler('add_question', add_question)],
 
