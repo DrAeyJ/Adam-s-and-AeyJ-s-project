@@ -1,9 +1,12 @@
 import logging
 import datetime
 import json
+import tracemalloc
 
+import requests
 import telebot
-from telegram.ext import Application, MessageHandler, CommandHandler, filters, ConversationHandler
+from telegram import Update
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ConversationHandler, ContextTypes
 from telegram import ReplyKeyboardMarkup
 from scripts.__all_models import User, Questions
 from scripts.env import BOT_TOKEN, reply_keyboard
@@ -52,13 +55,11 @@ async def start(update, context):
         if db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type == 'Unregistered':
             mode = 'u'
             application.add_handler(CommandHandler("register", register))
-        elif db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type == 'Registered':
+        if db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type in ['Registered', 'Moderator', 'Premium', 'Admin']:
             application.add_handler(questionaire_handler)
             application.add_handler(question_adding_handler)
             mode = 'r'
-        elif db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type == 'Moderator':
-            application.add_handler(questionaire_handler)
-            application.add_handler(question_adding_handler)
+        if db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type in ['Moderator', 'Premium', 'Admin']:
             application.add_handler(moderator_handler)
             mode = 'm'
             with open('db/moderator_question_relation.json') as file:
@@ -67,9 +68,16 @@ async def start(update, context):
                     data[str(user.id)] = []
             with open('db/moderator_question_relation.json', 'w') as file:
                 json.dump(data, file)
+        if db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type in ['Premium', 'Admin']:
+            mode = 'p'
+        if db_sess.query(User).filter(User.telegram_id.like(user.id)).first().type == 'Admin':
+            mode = 'a'
+            application.add_handler(CommandHandler('admin_code', admin_code))
         markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
-
-        await update.message.reply_html(f"Welcome {user.mention_html()}. I am QuestionMark.", reply_markup=markup)
+        adding = ''
+        if mode in ['m', 'a', 'p']:
+            adding = f'\nThe temperature outside is currently {requests.request(method="GET", url="http://api.weatherstack.com/current", params={"access_key": "960f96801cde94713c5de575d1a3dde0", "query": "fetch:ip"}).json()["current"]["temperature"]} degrees Celcius, sir.'
+        await update.message.reply_html(f"Welcome to QuestionMark, {user.mention_html()}." + adding, reply_markup=markup)
     except Exception as exc:
         logger.warning(f'          ERROR OCCURED          : {update.effective_user.id} : {update.effective_user.name}')
         logger.error(f'Logging exception on {datetime.datetime.now()} found by {update.effective_user.name} - {update.effective_user.id}', exc_info=True)
@@ -77,10 +85,10 @@ async def start(update, context):
 
 
 # noinspection PyUnusedLocal
-async def help_command(update, context):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.warning(f'       Help Command called       : {update.effective_user.id} : {update.effective_user.name}')
 
-    text = ['Welcome to telegram bot QuestionMark. This bot was created for not only entertaining, but also serious needs. For example, you can use this bot to collect statistics of people`s opinion on various topics. The idea of the project is that it allows you to create short questions with several answers, and users can answer them and see how other users answered. For this purpose, statistics is kept on questions, as well as there are likes and dislikes. To prevent bad questions, reports are implemented, thanks to which the community can tell moderators to remove the question.', '', 'Command list:']
+    text = ['Welcome to QuestionMark, a Telegram bot designed for both entertainment and serious use. It lets you create short questions with multiple answers, collect user responses, and display statistics on how others voted. The bot also features likes, dislikes, and a reporting system to help the community flag inappropriate questions for moderator review.', '', 'Command list:']
     db_sess = db_session.create_session()
     text.append('/start - Starting / Restarting the bot.')
     text.append('/help - Bot commands + dev contacts.')
@@ -90,15 +98,17 @@ async def help_command(update, context):
         text.append('/get_question  - Calls a question for you, bot will guide you how to answer and will show current statistics on this question.')
         text.append('/add_question - Allows to create your own question. Bot will guide you through creation.')
         text += ['', '']
-    if db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().type == 'Moderator':
+    if db_sess.query(User).filter(User.telegram_id.like(update.effective_user.id)).first().type in ['Moderator', 'Premium', 'Admin']:
         text.append(
             '/get_question  - Calls a question for you, bot will guide you how to answer and will show current statistics on this question.')
         text.append('/add_question - Allows to create your own question. Bot will guide you through creation.')
         text.append('/moderate - Special function for mods, allowing to moderate certain question by either suspending the author and deleting it or sparing the author.')
     db_sess.close()
     text.append('\n' + 'Share your questions, answer them and have fun! :)')
+    text.append('Contact devs if you want a special role like moderator, premium or administrator.')
     text.append('Dev contacts: <a href="tg://user?id=5833077979">DrAeyJ</a>')
-    await update.message.reply_text('\n'.join(text), reply_markup=markup, parse_mode='HTML')
+    with open("data/catsu.jpeg", "rb") as photo:
+        await context.bot.send_photo(chat_id=update.effective_chat.id, photo=photo, caption='\n'.join(text), parse_mode='HTML')
 
 
 # noinspection PyUnusedLocal
@@ -557,6 +567,7 @@ async def moderate(update, context):
                 question_repr = '\n'.join(question_repr)
                 await update.message.reply_text(question_repr, reply_markup=ReplyKeyboardMarkup(reply_keyboard['i-m'],
                                                                                                 one_time_keyboard=False))
+                db_sess.close()
                 return 1
             else:
                 await update.message.reply_text('No questions to moderate right now.',
@@ -645,6 +656,11 @@ async def suspension_time(update, context):
         return ConversationHandler.END
 
 
+# noinspection PyUnusedLocal
+async def admin_code(update, context):
+    await update.message.reply_text(f'{"".join(open("db/code.txt").readlines()[0][:-1])}\n\nUpdated last: {open("db/code.txt").readlines()[1]}')
+
+
 application = Application.builder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("help", help_command))
@@ -680,4 +696,5 @@ moderator_handler = ConversationHandler(
 
 markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
 
+tracemalloc.start()
 application.run_polling()
