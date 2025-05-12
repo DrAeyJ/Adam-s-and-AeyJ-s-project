@@ -1,7 +1,7 @@
 import datetime
 
 from sqlalchemy import Column, Integer, String, DATETIME
-from data.db_session import SqlAlchemyBase
+from db_session import SqlAlchemyBase
 
 
 class User(SqlAlchemyBase):

@@ -5,10 +5,10 @@ import json
 import telebot
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ConversationHandler
 from telegram import ReplyKeyboardMarkup
-from data.__all_models import User, Questions
-from data.env import BOT_TOKEN, reply_keyboard
-from data import db_session
-from data.logger_filter import MaxLevelFilter, ExceptionFormatter
+from scripts.__all_models import User, Questions
+from scripts.env import BOT_TOKEN, reply_keyboard
+from scripts import db_session
+from scripts.logger_filter import MaxLevelFilter, ExceptionFormatter
 
 logger = logging.getLogger(__name__)
 
