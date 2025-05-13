@@ -75,7 +75,7 @@ async def start(update, context):
             application.add_handler(CommandHandler('admin_code', admin_code))
         markup = ReplyKeyboardMarkup(reply_keyboard[mode], one_time_keyboard=False)
         adding = ''
-        if mode in ['m', 'a', 'p']:
+        if mode in ['a', 'p']:
             adding = f'\nThe temperature outside is currently {requests.request(method="GET", url="http://api.weatherstack.com/current", params={"access_key": "960f96801cde94713c5de575d1a3dde0", "query": "fetch:ip"}).json()["current"]["temperature"]} degrees Celcius, sir.'
         await update.message.reply_html(f"Welcome to QuestionMark, {user.mention_html()}." + adding, reply_markup=markup)
     except Exception as exc:
@@ -456,6 +456,9 @@ async def answers_writing(update, context):
                 question_in_creation.answer_3_count = 0
             if int(update.message.text) == 4:
                 question_in_creation.answer_4_count = 0
+            answers_left = int(update.message.text)
+            await update.message.reply_text('Please write the first answer to your question.', reply_markup=markup)
+            return 3
         else:
             await update.message.reply_text('How many answers does your question have?', reply_markup=markup)
             return 2
